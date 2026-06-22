@@ -1,4 +1,11 @@
 export default {
+  async fetch(request, env, ctx) {
+    return new Response("Rythamo Mail Worker is running!", {
+      status: 200,
+      headers: { "Content-Type": "text/plain" },
+    });
+  },
+
   async email(message, env, ctx) {
     const to = message.to;
     const from = message.from;
@@ -14,12 +21,10 @@ export default {
     } else if (contentType.includes("text/html")) {
       html = await new Response(message.raw).text();
     } else {
-      // Multipart - try to extract both
       const rawText = await new Response(message.raw).text();
       body = rawText;
     }
 
-    // Forward to your Next.js API
     const response = await fetch(`${env.APP_URL}/api/inbound`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

@@ -1,6 +1,7 @@
 name = "rythamo-mail-worker"
 main = "index.js"
 compatibility_date = "2024-01-01"
+account_id = "e3dad1a346caadf6f9bc6442f5c44c49"
 
 [vars]
-APP_URL = "https://your-app-url.vercel.app"
+APP_URL = "https://temp-mail-red.vercel.app"
