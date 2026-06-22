@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
       subject = json.subject || "(no subject)";
       body = json.text || json.body || "";
       html = json.html || "";
-    } else if (contentType.includes("multipart/")) {
+    } else if (contentType.includes("multipart/form-data")) {
       const formData = await req.formData();
       from = (formData.get("from") as string) || "";
       to = (formData.get("to") as string) || "";
@@ -48,6 +48,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true, id });
   } catch (error) {
     console.error("Inbound email error:", error);
-    return NextResponse.json({ error: "Failed to process email" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to process email" },
+      { status: 500 }
+    );
   }
 }

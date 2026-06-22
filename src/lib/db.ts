@@ -4,9 +4,16 @@ let _db: ReturnType<typeof createClient> | null = null;
 
 export function getDb() {
   if (!_db) {
+    const url = process.env.TURSO_DATABASE_URL;
+    const authToken = process.env.TURSO_AUTH_TOKEN;
+
+    if (!url) {
+      throw new Error("TURSO_DATABASE_URL is not set");
+    }
+
     _db = createClient({
-      url: process.env.TURSO_DATABASE_URL || "file:local.db",
-      authToken: process.env.TURSO_AUTH_TOKEN || undefined,
+      url,
+      authToken: authToken || undefined,
     });
   }
   return _db;
@@ -14,6 +21,7 @@ export function getDb() {
 
 export async function initDB() {
   const db = getDb();
+
   await db.execute(`
     CREATE TABLE IF NOT EXISTS emails (
       id TEXT PRIMARY KEY,
