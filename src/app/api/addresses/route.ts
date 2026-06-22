@@ -54,6 +54,7 @@ export async function GET() {
       expiryMinutes: row.expiry_minutes,
       autoDelete: row.auto_delete === 1,
       maxEmails: row.max_emails,
+      forwardTo: row.forward_to || "",
       emailCount: row.email_count,
       lastEmailAt: row.last_email_at,
     }));
@@ -70,7 +71,7 @@ export async function POST(req: NextRequest) {
     await initDB();
     const db = getDb();
 
-    const { localPart, expiryMinutes = 10, autoDelete = true, maxEmails = 100 } = await req.json();
+    const { localPart, expiryMinutes = 10, autoDelete = true, maxEmails = 100, forwardTo = "" } = await req.json();
 
     if (!localPart) {
       return NextResponse.json({ error: "Address is required" }, { status: 400 });
@@ -103,9 +104,9 @@ export async function POST(req: NextRequest) {
     const id = nanoid(21);
 
     await db.execute({
-      sql: `INSERT INTO addresses (id, local_part, domain, expiry_minutes, auto_delete, max_emails)
-            VALUES (?, ?, ?, ?, ?, ?)`,
-      args: [id, normalized, VALID_DOMAIN, expiryMinutes, autoDelete ? 1 : 0, maxEmails],
+      sql: `INSERT INTO addresses (id, local_part, domain, expiry_minutes, auto_delete, max_emails, forward_to)
+            VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      args: [id, normalized, VALID_DOMAIN, expiryMinutes, autoDelete ? 1 : 0, maxEmails, forwardTo],
     });
 
     return NextResponse.json({

@@ -36,12 +36,12 @@ export async function initDB() {
     )
   `);
 
-  // Migrations for existing databases
   const migrations = [
     { sql: `ALTER TABLE addresses ADD COLUMN expiry_minutes INTEGER DEFAULT 10`, error: "duplicate column" },
     { sql: `ALTER TABLE addresses ADD COLUMN auto_delete INTEGER DEFAULT 1`, error: "duplicate column" },
     { sql: `ALTER TABLE addresses ADD COLUMN max_emails INTEGER DEFAULT 100`, error: "duplicate column" },
     { sql: `ALTER TABLE emails ADD COLUMN is_read INTEGER DEFAULT 0`, error: "duplicate column" },
+    { sql: `ALTER TABLE addresses ADD COLUMN forward_to TEXT DEFAULT ''`, error: "duplicate column" },
   ];
 
   for (const migration of migrations) {

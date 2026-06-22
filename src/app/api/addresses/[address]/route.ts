@@ -33,6 +33,7 @@ export async function GET(
         expiryMinutes: row.expiry_minutes,
         autoDelete: row.auto_delete === 1,
         maxEmails: row.max_emails,
+        forwardTo: row.forward_to || "",
       },
     });
   } catch (error) {
@@ -78,6 +79,12 @@ export async function PATCH(
       }
       updates.push("max_emails = ?");
       args.push(body.maxEmails);
+    }
+
+    if (body.forwardTo !== undefined) {
+      const sanitized = body.forwardTo.trim().slice(0, 500);
+      updates.push("forward_to = ?");
+      args.push(sanitized);
     }
 
     if (updates.length === 0) {

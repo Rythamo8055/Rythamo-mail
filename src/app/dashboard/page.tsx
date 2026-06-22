@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import DOMPurify from "dompurify";
 
 const DOMAIN = "rythamo.qzz.io";
@@ -25,9 +25,7 @@ function sanitizeHtml(html: string): string {
 }
 
 function getTimeLeft(expiresAt: string): { display: string; percent: number; isPermanent: boolean } {
-  if (expiresAt === "2099-12-31T23:59:59.000Z") {
-    return { display: "∞", percent: 100, isPermanent: true };
-  }
+  if (expiresAt === "2099-12-31T23:59:59.000Z") return { display: "∞", percent: 100, isPermanent: true };
   const now = Date.now();
   const expiry = new Date(expiresAt).getTime();
   const diff = Math.max(0, expiry - now);
@@ -38,29 +36,23 @@ function getTimeLeft(expiresAt: string): { display: string; percent: number; isP
   return { display: `${minutes}:${seconds.toString().padStart(2, "0")}`, percent, isPermanent: false };
 }
 
+function toggleTheme() {
+  const html = document.documentElement;
+  const isLight = html.getAttribute("data-theme") === "light";
+  if (isLight) { html.removeAttribute("data-theme"); localStorage.setItem("theme", "dark"); }
+  else { html.setAttribute("data-theme", "light"); localStorage.setItem("theme", "light"); }
+}
+
 interface Address {
-  id: string;
-  localPart: string;
-  domain: string;
-  fullAddress: string;
-  createdAt: string;
-  isActive: boolean;
-  expiryMinutes: number;
-  autoDelete: boolean;
-  maxEmails: number;
-  emailCount: number;
-  lastEmailAt: string | null;
+  id: string; localPart: string; domain: string; fullAddress: string;
+  createdAt: string; isActive: boolean; expiryMinutes: number;
+  autoDelete: boolean; maxEmails: number; forwardTo: string;
+  emailCount: number; lastEmailAt: string | null;
 }
 
 interface Email {
-  id: string;
-  from: string;
-  subject: string;
-  body: string;
-  html: string;
-  createdAt: string;
-  expiresAt: string;
-  isRead: boolean;
+  id: string; from: string; subject: string; body: string; html: string;
+  createdAt: string; expiresAt: string; isRead: boolean;
 }
 
 export default function Dashboard() {
@@ -79,22 +71,53 @@ export default function Dashboard() {
   const [showSettings, setShowSettings] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isLight, setIsLight] = useState(false);
+  const [notifEnabled, setNotifEnabled] = useState(false);
+  const [newEmailCount, setNewEmailCount] = useState(0);
+  const prevEmailIds = useRef<Set<string>>(new Set());
+  const searchTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  useEffect(() => {
+    setIsLight(document.documentElement.getAttribute("data-theme") === "light");
+    if (typeof Notification !== "undefined" && Notification.permission === "granted") setNotifEnabled(true);
+  }, []);
+
+  const canNotify = typeof Notification !== "undefined";
+
+  const requestNotification = () => {
+    if (!canNotify) return;
+    if (Notification.permission === "granted") { setNotifEnabled(true); return; }
+    Notification.requestPermission().then(p => { if (p === "granted") setNotifEnabled(true); });
+  };
 
   const fetchAddresses = useCallback(async () => {
-    try {
-      const res = await fetch("/api/addresses");
-      const data = await res.json();
-      setAddresses(data.addresses || []);
-    } catch {}
+    try { const r = await fetch("/api/addresses"); setAddresses((await r.json()).addresses || []); } catch {}
   }, []);
 
-  const fetchEmails = useCallback(async (addressId: string) => {
+  const fetchEmails = useCallback(async (addressId: string, query?: string) => {
     try {
-      const res = await fetch(`/api/addresses/${addressId}/emails`);
-      const data = await res.json();
-      setEmails(data.emails || []);
+      let url = `/api/addresses/${addressId}/emails`;
+      if (query) url += `?q=${encodeURIComponent(query)}`;
+      const r = await fetch(url);
+      const data = await r.json();
+      const newList: Email[] = data.emails || [];
+
+      if (!query && prevEmailIds.current.size > 0) {
+        const newIds = new Set(newList.map(e => e.id));
+        const fresh = newList.filter(e => !prevEmailIds.current.has(e.id));
+        if (fresh.length > 0 && notifEnabled && canNotify && Notification.permission === "granted") {
+          for (const email of fresh.slice(0, 3)) {
+            new Notification(`New email from ${email.from}`, { body: email.subject, tag: email.id });
+          }
+          setNewEmailCount(c => c + fresh.length);
+        }
+      }
+      if (!query) prevEmailIds.current = new Set(newList.map(e => e.id));
+
+      setEmails(newList);
     } catch {}
-  }, []);
+  }, [notifEnabled]);
 
   useEffect(() => { fetchAddresses(); }, [fetchAddresses]);
 
@@ -105,25 +128,26 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, [selectedAddress, fetchEmails]);
 
+  const handleSearch = (q: string) => {
+    setSearchQuery(q);
+    clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => {
+      if (selectedAddress) fetchEmails(selectedAddress.id, q || undefined);
+    }, 300);
+  };
+
   const handleCreate = async () => {
     if (!newLocalPart.trim()) return;
-    setLoading(true);
-    setError("");
+    setLoading(true); setError("");
     try {
-      const res = await fetch("/api/addresses", {
+      const r = await fetch("/api/addresses", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          localPart: newLocalPart.trim(),
-          expiryMinutes: newExpiry,
-          autoDelete: newAutoDelete,
-          maxEmails: newMaxEmails,
-        }),
+        body: JSON.stringify({ localPart: newLocalPart.trim(), expiryMinutes: newExpiry, autoDelete: newAutoDelete, maxEmails: newMaxEmails }),
       });
-      const data = await res.json();
-      if (!res.ok) { setError(data.error || "Failed"); return; }
-      setNewLocalPart("");
-      setShowCreate(false);
+      const d = await r.json();
+      if (!r.ok) { setError(d.error || "Failed"); return; }
+      setNewLocalPart(""); setShowCreate(false);
       await fetchAddresses();
     } catch { setError("Failed"); }
     finally { setLoading(false); }
@@ -149,6 +173,7 @@ export default function Dashboard() {
           expiryMinutes: selectedAddress.expiryMinutes,
           autoDelete: selectedAddress.autoDelete,
           maxEmails: selectedAddress.maxEmails,
+          forwardTo: selectedAddress.forwardTo,
         }),
       });
       setShowSettings(false);
@@ -158,7 +183,7 @@ export default function Dashboard() {
   };
 
   const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
+    if (typeof navigator !== "undefined") navigator.clipboard.writeText(text);
     setCopied(text);
     setTimeout(() => setCopied(""), 2000);
   };
@@ -168,10 +193,9 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-black text-white">
+    <div className="min-h-screen" style={{ background: "var(--background)" }}>
       <div className="max-w-7xl mx-auto px-4 py-6 sm:py-8">
 
-        {/* Header */}
         <header className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-3">
             <a href="/" className="text-gray-500 hover:text-gray-300 transition-colors" aria-label="Back">
@@ -182,72 +206,59 @@ export default function Dashboard() {
               <p className="text-xs text-gray-500">Manage your email addresses</p>
             </div>
           </div>
-          <button onClick={() => setShowCreate(!showCreate)} className="bg-green-500 hover:bg-green-400 active:bg-green-600 text-black font-semibold px-4 py-2 rounded-xl transition-all text-sm focus-visible:ring-2 focus-visible:ring-green-400 focus-visible:ring-offset-2 focus-visible:ring-offset-black">+ New Address</button>
+          <div className="flex items-center gap-2">
+            {!notifEnabled && canNotify && Notification.permission !== "denied" && (
+              <button onClick={requestNotification} className="text-xs text-gray-500 hover:text-gray-300 bg-gray-800/50 px-2 py-1.5 rounded-lg transition-colors">
+                🔔 Enable
+              </button>
+            )}
+            <button onClick={() => { toggleTheme(); setIsLight(!isLight); }}
+              className="text-gray-500 hover:text-green-400 transition-colors p-1.5 rounded-lg hover:bg-gray-800/50" aria-label="Toggle theme">
+              {isLight ? (
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+              ) : (
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+              )}
+            </button>
+            <button onClick={() => setShowCreate(!showCreate)} className="bg-green-500 hover:bg-green-400 active:bg-green-600 text-black font-semibold px-4 py-2 rounded-xl transition-all text-sm">+ New Address</button>
+          </div>
         </header>
 
-        {/* Create Modal */}
         {showCreate && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 w-full max-w-md" role="dialog" aria-modal="true" aria-label="Create new address">
               <h2 className="text-lg font-semibold mb-4">Create New Address</h2>
-
               <label className="text-sm text-gray-400 mb-1.5 block">Address</label>
               <div className="flex items-center gap-0 mb-4">
-                <input
-                  type="text"
-                  value={newLocalPart}
+                <input type="text" value={newLocalPart}
                   onChange={(e) => { setNewLocalPart(e.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, "")); setError(""); }}
                   onKeyDown={(e) => e.key === "Enter" && handleCreate()}
-                  placeholder="yourname"
-                  spellCheck={false}
-                  autoComplete="off"
-                  className="flex-1 bg-gray-800 text-green-400 font-mono px-4 py-3 rounded-l-xl border border-r-0 border-gray-700 focus:outline-none focus:ring-2 focus:ring-green-500/50"
-                  autoFocus
-                />
+                  placeholder="yourname" spellCheck={false} autoComplete="off" autoFocus
+                  className="flex-1 bg-gray-800 text-green-400 font-mono px-4 py-3 rounded-l-xl border border-r-0 border-gray-700 focus:outline-none focus:ring-2 focus:ring-green-500/50"/>
                 <span className="bg-gray-800 text-gray-400 font-mono px-3 py-3 rounded-r-xl border border-gray-700 text-sm whitespace-nowrap">@{DOMAIN}</span>
               </div>
-
               <label className="text-sm text-gray-400 mb-1.5 block">Expiry time</label>
               <div className="grid grid-cols-4 gap-2 mb-4">
                 {EXPIRY_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.value}
-                    onClick={() => setNewExpiry(opt.value)}
+                  <button key={opt.value} onClick={() => setNewExpiry(opt.value)}
                     className={`px-2 py-2 rounded-lg text-xs font-medium transition-all ${
-                      newExpiry === opt.value
-                        ? "bg-green-500/20 text-green-400 border border-green-500/50"
-                        : "bg-gray-800 text-gray-400 border border-gray-700 hover:border-gray-600"
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
+                      newExpiry === opt.value ? "bg-green-500/20 text-green-400 border border-green-500/50" : "bg-gray-800 text-gray-400 border border-gray-700 hover:border-gray-600"
+                    }`}>{opt.label}</button>
                 ))}
               </div>
-
               <label className="flex items-center gap-3 mb-4 cursor-pointer">
-                <div
-                  onClick={() => setNewAutoDelete(!newAutoDelete)}
-                  className={`w-10 h-5 rounded-full transition-colors relative ${newAutoDelete ? "bg-green-500" : "bg-gray-700"}`}
-                >
-                  <div className={`w-4 h-4 bg-white rounded-full absolute top-0.5 transition-all ${newAutoDelete ? "left-5" : "left-0.5"}`} />
+                <div onClick={() => setNewAutoDelete(!newAutoDelete)}
+                  className={`w-10 h-5 rounded-full transition-colors relative ${newAutoDelete ? "bg-green-500" : "bg-gray-700"}`}>
+                  <div className={`w-4 h-4 bg-white rounded-full absolute top-0.5 transition-all ${newAutoDelete ? "left-5" : "left-0.5"}`}/>
                 </div>
                 <span className="text-sm text-gray-300">Auto-delete emails after expiry</span>
               </label>
-
               <div className="mb-4">
                 <label className="text-sm text-gray-400 mb-1.5 block">Max emails (0 = unlimited)</label>
-                <input
-                  type="number"
-                  value={newMaxEmails}
-                  onChange={(e) => setNewMaxEmails(Number(e.target.value))}
-                  min={0}
-                  max={10000}
-                  className="w-full bg-gray-800 text-white px-4 py-2 rounded-xl border border-gray-700 focus:outline-none focus:ring-2 focus:ring-green-500/50 text-sm"
-                />
+                <input type="number" value={newMaxEmails} onChange={(e) => setNewMaxEmails(Number(e.target.value))} min={0} max={10000}
+                  className="w-full bg-gray-800 text-white px-4 py-2 rounded-xl border border-gray-700 focus:outline-none focus:ring-2 focus:ring-green-500/50 text-sm"/>
               </div>
-
               {error && <p className="text-red-400 text-sm mb-3" role="alert">{error}</p>}
-
               <div className="flex gap-2 justify-end">
                 <button onClick={() => { setShowCreate(false); setError(""); }} className="px-4 py-2 text-gray-400 hover:text-white transition-colors text-sm">Cancel</button>
                 <button onClick={handleCreate} disabled={loading || !newLocalPart.trim()} className="bg-green-500 hover:bg-green-400 text-black font-semibold px-4 py-2 rounded-xl transition-all text-sm disabled:opacity-50">{loading ? "Creating..." : "Create"}</button>
@@ -256,10 +267,9 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Main Content */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
 
-          {/* Sidebar - Addresses */}
+          {/* Sidebar */}
           <div className="lg:col-span-3">
             <div className="bg-gray-900/50 backdrop-blur rounded-2xl border border-gray-800/50 overflow-hidden">
               <div className="p-4 border-b border-gray-800/50">
@@ -277,17 +287,14 @@ export default function Dashboard() {
                 ) : (
                   addresses.map((addr) => (
                     <div key={addr.id}>
-                      <button
-                        onClick={() => { setSelectedAddress(addr); setSelectedEmail(null); setShowSettings(false); }}
-                        onKeyDown={(e) => handleKeyDown(e, () => { setSelectedAddress(addr); setSelectedEmail(null); })}
-                        role="option"
-                        aria-selected={selectedAddress?.id === addr.id}
+                      <button onClick={() => { prevEmailIds.current = new Set(); setSelectedAddress(addr); setSelectedEmail(null); setShowSettings(false); setNewEmailCount(0); }}
+                        onKeyDown={(e) => handleKeyDown(e, () => { prevEmailIds.current = new Set(); setSelectedAddress(addr); setSelectedEmail(null); })}
+                        role="option" aria-selected={selectedAddress?.id === addr.id}
                         className={`w-full text-left p-3 border-b border-gray-800/30 hover:bg-gray-800/50 transition-colors ${
                           selectedAddress?.id === addr.id ? "bg-gray-800/60 border-l-2 border-l-green-500" : ""
-                        }`}
-                      >
+                        }`}>
                         <div className="flex items-center gap-2">
-                          <span className={`w-2 h-2 rounded-full shrink-0 ${addr.isActive ? "bg-green-500" : "bg-gray-600"}`} />
+                          <span className={`w-2 h-2 rounded-full shrink-0 ${addr.isActive ? "bg-green-500" : "bg-gray-600"}`}/>
                           <span className="font-mono text-sm text-green-400 truncate">{addr.localPart}</span>
                         </div>
                         <div className="flex items-center gap-2 mt-1 ml-4 text-[10px] text-gray-600">
@@ -297,7 +304,6 @@ export default function Dashboard() {
                           {!addr.autoDelete && addr.expiryMinutes > 0 && <span>· kept</span>}
                         </div>
                       </button>
-
                       {deleteConfirm === addr.id && (
                         <div className="p-3 bg-red-900/20 border-b border-gray-800/30">
                           <p className="text-xs text-red-400 mb-2">Delete this address & all emails?</p>
@@ -318,76 +324,79 @@ export default function Dashboard() {
           <div className="lg:col-span-4">
             <div className="bg-gray-900/50 backdrop-blur rounded-2xl border border-gray-800/50 overflow-hidden">
               <div className="p-4 border-b border-gray-800/50">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between mb-3">
                   <h2 className="font-semibold text-gray-300">
                     {selectedAddress ? <span className="font-mono text-sm text-green-400">{selectedAddress.fullAddress}</span> : "Inbox"}
                   </h2>
-                  {selectedAddress && (
-                    <div className="flex items-center gap-1">
-                      <button onClick={() => handleCopy(selectedAddress.fullAddress)} className="text-gray-500 hover:text-gray-300 transition-colors p-1.5 rounded-lg hover:bg-gray-800" aria-label="Copy">
-                        {copied === selectedAddress.fullAddress
-                          ? <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-green-400"><polyline points="20 6 9 17 4 12"/></svg>
-                          : <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>}
-                      </button>
-                      <button onClick={() => { setShowSettings(!showSettings); setDeleteConfirm(null); }} className={`text-gray-500 hover:text-gray-300 transition-colors p-1.5 rounded-lg hover:bg-gray-800 ${showSettings ? "bg-gray-800 text-green-400" : ""}`} aria-label="Settings">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-                      </button>
-                      <button onClick={() => setDeleteConfirm(selectedAddress.id)} className="text-gray-500 hover:text-red-400 transition-colors p-1.5 rounded-lg hover:bg-gray-800" aria-label="Delete">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
-                      </button>
-                    </div>
-                  )}
+                  <div className="flex items-center gap-1">
+                    {newEmailCount > 0 && (
+                      <span className="text-[10px] bg-yellow-500/20 text-yellow-400 px-1.5 py-0.5 rounded-full font-medium">+{newEmailCount} new</span>
+                    )}
+                    {selectedAddress && (
+                      <>
+                        <button onClick={() => handleCopy(selectedAddress.fullAddress)} className="text-gray-500 hover:text-gray-300 transition-colors p-1.5 rounded-lg hover:bg-gray-800" aria-label="Copy">
+                          {copied === selectedAddress.fullAddress
+                            ? <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-green-400"><polyline points="20 6 9 17 4 12"/></svg>
+                            : <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>}
+                        </button>
+                        <button onClick={() => { setShowSettings(!showSettings); setDeleteConfirm(null); }} className={`text-gray-500 hover:text-gray-300 transition-colors p-1.5 rounded-lg hover:bg-gray-800 ${showSettings ? "bg-gray-800 text-green-400" : ""}`} aria-label="Settings">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+                        </button>
+                        <button onClick={() => setDeleteConfirm(selectedAddress.id)} className="text-gray-500 hover:text-red-400 transition-colors p-1.5 rounded-lg hover:bg-gray-800" aria-label="Delete">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
+                {selectedAddress && (
+                  <div className="relative">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                    <input type="text" value={searchQuery} onChange={(e) => handleSearch(e.target.value)}
+                      placeholder="Search by sender or subject..." spellCheck={false}
+                      className="w-full bg-gray-800 text-white text-xs pl-9 pr-3 py-2 rounded-lg border border-gray-700 focus:outline-none focus:ring-1 focus:ring-green-500/50"/>
+                  </div>
+                )}
               </div>
 
-              {/* Settings Panel */}
               {showSettings && selectedAddress && (
                 <div className="p-4 border-b border-gray-800/50 bg-gray-900/80">
                   <h3 className="text-sm font-medium text-gray-300 mb-3">Address Settings</h3>
-
                   <label className="text-xs text-gray-500 mb-1.5 block">Expiry time</label>
                   <div className="grid grid-cols-4 gap-1.5 mb-3">
                     {EXPIRY_OPTIONS.map((opt) => (
-                      <button
-                        key={opt.value}
-                        onClick={() => setSelectedAddress({ ...selectedAddress, expiryMinutes: opt.value })}
+                      <button key={opt.value} onClick={() => setSelectedAddress({ ...selectedAddress, expiryMinutes: opt.value })}
                         className={`px-1.5 py-1.5 rounded-lg text-[10px] font-medium transition-all ${
-                          selectedAddress.expiryMinutes === opt.value
-                            ? "bg-green-500/20 text-green-400 border border-green-500/50"
-                            : "bg-gray-800 text-gray-400 border border-gray-700 hover:border-gray-600"
-                        }`}
-                      >
-                        {opt.label}
-                      </button>
+                          selectedAddress.expiryMinutes === opt.value ? "bg-green-500/20 text-green-400 border border-green-500/50" : "bg-gray-800 text-gray-400 border border-gray-700 hover:border-gray-600"
+                        }`}>{opt.label}</button>
                     ))}
                   </div>
-
                   <label className="flex items-center gap-3 mb-3 cursor-pointer">
-                    <div
-                      onClick={() => setSelectedAddress({ ...selectedAddress, autoDelete: !selectedAddress.autoDelete })}
-                      className={`w-9 h-4.5 rounded-full transition-colors relative ${selectedAddress.autoDelete ? "bg-green-500" : "bg-gray-700"}`}
-                    >
-                      <div className={`w-3.5 h-3.5 bg-white rounded-full absolute top-0.5 transition-all ${selectedAddress.autoDelete ? "left-4.5" : "left-0.5"}`} />
+                    <div onClick={() => setSelectedAddress({ ...selectedAddress, autoDelete: !selectedAddress.autoDelete })}
+                      className={`w-9 h-4.5 rounded-full transition-colors relative ${selectedAddress.autoDelete ? "bg-green-500" : "bg-gray-700"}`}>
+                      <div className={`w-3.5 h-3.5 bg-white rounded-full absolute top-0.5 transition-all ${selectedAddress.autoDelete ? "left-4.5" : "left-0.5"}`}/>
                     </div>
                     <span className="text-xs text-gray-300">Auto-delete</span>
                   </label>
-
                   <div className="mb-3">
                     <label className="text-xs text-gray-500 mb-1 block">Max emails</label>
-                    <input type="number" value={selectedAddress.maxEmails} onChange={(e) => setSelectedAddress({ ...selectedAddress, maxEmails: Number(e.target.value) })} min={0} max={10000} className="w-full bg-gray-800 text-white px-3 py-1.5 rounded-lg border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-green-500/50" />
+                    <input type="number" value={selectedAddress.maxEmails} onChange={(e) => setSelectedAddress({ ...selectedAddress, maxEmails: Number(e.target.value) })} min={0} max={10000}
+                      className="w-full bg-gray-800 text-white px-3 py-1.5 rounded-lg border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-green-500/50"/>
                   </div>
-
-                  <button
-                    onClick={handleSaveSettings}
-                    disabled={savingSettings}
-                    className="w-full bg-green-500 hover:bg-green-400 text-black font-semibold py-1.5 rounded-lg transition-all text-xs disabled:opacity-50"
-                  >
+                  <div className="mb-3">
+                    <label className="text-xs text-gray-500 mb-1 block">Forward to webhook (optional)</label>
+                    <input type="url" value={selectedAddress.forwardTo} onChange={(e) => setSelectedAddress({ ...selectedAddress, forwardTo: e.target.value })}
+                      placeholder="https://..." spellCheck={false}
+                      className="w-full bg-gray-800 text-white px-3 py-1.5 rounded-lg border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-green-500/50"/>
+                    <p className="text-[10px] text-gray-600 mt-1">New emails are POSTed as JSON to this URL</p>
+                  </div>
+                  <button onClick={handleSaveSettings} disabled={savingSettings}
+                    className="w-full bg-green-500 hover:bg-green-400 text-black font-semibold py-1.5 rounded-lg transition-all text-xs disabled:opacity-50">
                     {savingSettings ? "Saving..." : "Save Settings"}
                   </button>
                 </div>
               )}
 
-              {/* Email List */}
               <div className="max-h-[500px] overflow-y-auto" role="listbox" aria-label="Email list">
                 {!selectedAddress ? (
                   <div className="p-10 text-center text-gray-500">
@@ -397,31 +406,23 @@ export default function Dashboard() {
                 ) : emails.length === 0 ? (
                   <div className="p-10 text-center text-gray-500">
                     <div className="text-5xl mb-3 opacity-30" aria-hidden="true">📭</div>
-                    <p className="text-sm">No emails yet</p>
+                    <p className="text-sm">{searchQuery ? "No matching emails" : "No emails yet"}</p>
                   </div>
                 ) : (
                   emails.map((email) => {
                     const { display, percent, isPermanent } = getTimeLeft(email.expiresAt);
                     return (
-                      <button
-                        key={email.id}
-                        onClick={() => { setSelectedEmail(email); }}
+                      <button key={email.id} onClick={() => setSelectedEmail(email)}
                         onKeyDown={(e) => handleKeyDown(e, () => setSelectedEmail(email))}
-                        role="option"
-                        aria-selected={selectedEmail?.id === email.id}
+                        role="option" aria-selected={selectedEmail?.id === email.id}
                         className={`w-full text-left p-4 border-b border-gray-800/30 hover:bg-gray-800/50 transition-colors ${
-                          selectedEmail?.id === email.id ? "bg-gray-800/60 border-l-2 border-l-green-500" : !email.isRead ? "border-l-2 border-l-blue-500" : ""
-                        }`}
-                      >
+                          selectedEmail?.id === email.id ? "bg-gray-800/60 border-l-2 border-l-green-500" : ""
+                        }`}>
                         <div className="flex items-center justify-between gap-2">
                           <span className="text-sm text-green-400 truncate font-medium">{email.from}</span>
                           <div className="flex items-center gap-2 shrink-0">
-                            {isPermanent ? (
-                              <span className="text-[10px] text-blue-400">∞</span>
-                            ) : (
-                              <span className={`text-[10px] tabular-nums ${percent < 20 ? "text-red-400" : percent < 50 ? "text-yellow-400" : "text-gray-500"}`}>
-                                {display}
-                              </span>
+                            {isPermanent ? <span className="text-[10px] text-blue-400">∞</span> : (
+                              <span className={`text-[10px] tabular-nums ${percent < 20 ? "text-red-400" : percent < 50 ? "text-yellow-400" : "text-gray-500"}`}>{display}</span>
                             )}
                             <span className="text-[10px] text-gray-600">{new Date(email.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
                           </div>

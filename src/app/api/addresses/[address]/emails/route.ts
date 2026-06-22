@@ -11,8 +11,9 @@ export async function GET(
 
     const db = getDb();
     const { address } = await params;
+    const { searchParams } = new URL(req.url);
+    const q = searchParams.get("q")?.trim() || "";
 
-    // Get address info
     const addrResult = await db.execute({
       sql: `SELECT * FROM addresses WHERE id = ?`,
       args: [address],
@@ -25,14 +26,24 @@ export async function GET(
     const addr = addrResult.rows[0];
     const fullAddress = `${addr.local_part}@${addr.domain}`;
 
-    // Get emails for this address
-    const result = await db.execute({
-      sql: `SELECT id, from_addr, subject, body, html, created_at, expires_at
-            FROM emails
-            WHERE address = ?
-            ORDER BY created_at DESC`,
-      args: [fullAddress],
-    });
+    let sql: string;
+    let args: (string | number)[];
+
+    if (q) {
+      sql = `SELECT id, from_addr, subject, body, html, created_at, expires_at
+             FROM emails
+             WHERE address = ? AND (subject LIKE ? OR from_addr LIKE ?)
+             ORDER BY created_at DESC`;
+      args = [fullAddress, `%${q}%`, `%${q}%`];
+    } else {
+      sql = `SELECT id, from_addr, subject, body, html, created_at, expires_at
+             FROM emails
+             WHERE address = ?
+             ORDER BY created_at DESC`;
+      args = [fullAddress];
+    }
+
+    const result = await db.execute({ sql, args });
 
     const emails = result.rows.map((row) => ({
       id: row.id,

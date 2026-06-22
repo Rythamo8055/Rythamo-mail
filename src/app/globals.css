@@ -3,7 +3,27 @@
 :root {
   --background: #000000;
   --foreground: #ededed;
+  --surface: #111111;
+  --surface-secondary: #1a1a1a;
+  --border: #1f2937;
+  --border-light: #374151;
+  --text-primary: #ededed;
+  --text-secondary: #9ca3af;
+  --text-tertiary: #6b7280;
   color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  --surface: #ffffff;
+  --surface-secondary: #f1f5f9;
+  --border: #e2e8f0;
+  --border-light: #cbd5e1;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-tertiary: #64748b;
+  color-scheme: light;
 }
 
 @theme inline {
@@ -49,10 +69,10 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #374151;
+  background: var(--border-light);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #4b5563;
+  background: var(--text-tertiary);
 }

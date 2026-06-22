@@ -70,22 +70,23 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid address" }, { status: 400 });
     }
 
-    // Look up address settings
     const localPart = address.split("@")[0];
     const addrResult = await db.execute({
-      sql: `SELECT expiry_minutes, auto_delete, max_emails FROM addresses WHERE local_part = ? AND domain = 'rythamo.qzz.io'`,
+      sql: `SELECT expiry_minutes, auto_delete, max_emails, forward_to FROM addresses WHERE local_part = ? AND domain = 'rythamo.qzz.io'`,
       args: [localPart],
     });
 
     let expiryMinutes = 10;
     let autoDelete = true;
     let maxEmails = 100;
+    let forwardTo = "";
 
     if (addrResult.rows.length > 0) {
       const settings = addrResult.rows[0];
       expiryMinutes = (settings.expiry_minutes as number) ?? 10;
       autoDelete = (settings.auto_delete as number) === 1;
       maxEmails = (settings.max_emails as number) ?? 100;
+      forwardTo = (settings.forward_to as string) || "";
     }
 
     // Check max emails limit
@@ -126,6 +127,19 @@ export async function POST(req: NextRequest) {
     });
 
     await cleanupExpired();
+
+    if (forwardTo) {
+      try {
+        await fetch(forwardTo, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id, from, to: address, subject, text: body, html, receivedAt: new Date().toISOString() }),
+          signal: AbortSignal.timeout(10000),
+        });
+      } catch {
+        // Forwarding failed silently
+      }
+    }
 
     return NextResponse.json({ success: true, id });
   } catch (error) {
