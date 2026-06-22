@@ -23,6 +23,17 @@ export async function initDB() {
   const db = getDb();
 
   await db.execute(`
+    CREATE TABLE IF NOT EXISTS addresses (
+      id TEXT PRIMARY KEY,
+      local_part TEXT NOT NULL,
+      domain TEXT NOT NULL DEFAULT 'rythamo.qzz.io',
+      created_at TEXT DEFAULT (datetime('now')),
+      is_active INTEGER DEFAULT 1,
+      UNIQUE(local_part, domain)
+    )
+  `);
+
+  await db.execute(`
     CREATE TABLE IF NOT EXISTS emails (
       id TEXT PRIMARY KEY,
       address TEXT NOT NULL,
@@ -31,9 +42,17 @@ export async function initDB() {
       body TEXT DEFAULT '',
       html TEXT DEFAULT '',
       created_at TEXT DEFAULT (datetime('now')),
-      expires_at TEXT NOT NULL
+      expires_at TEXT NOT NULL,
+      is_read INTEGER DEFAULT 0
     )
   `);
+
+  // Migration: add is_read column if missing
+  try {
+    await db.execute(`ALTER TABLE emails ADD COLUMN is_read INTEGER DEFAULT 0`);
+  } catch {
+    // Column already exists
+  }
 
   await db.execute(`
     CREATE INDEX IF NOT EXISTS idx_address ON emails(address)
@@ -41,6 +60,10 @@ export async function initDB() {
 
   await db.execute(`
     CREATE INDEX IF NOT EXISTS idx_expires ON emails(expires_at)
+  `);
+
+  await db.execute(`
+    CREATE INDEX IF NOT EXISTS idx_addresses_local ON addresses(local_part)
   `);
 }
 
