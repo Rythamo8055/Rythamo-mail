@@ -1,0 +1,6 @@
+name = "rythamo-mail-worker"
+main = "index.js"
+compatibility_date = "2024-01-01"
+
+[vars]
+APP_URL = "https://your-app-url.vercel.app"
