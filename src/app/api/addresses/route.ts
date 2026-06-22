@@ -4,6 +4,7 @@ import { getDb, initDB } from "@/lib/db";
 
 const VALID_DOMAIN = "rythamo.qzz.io";
 const BLOCKED_WORDS = ["admin", "root", "support", "abuse", "postmaster", "webmaster", "hostmaster", "noreply", "no-reply"];
+const VALID_EXPIRY = [0, 5, 10, 30, 60, 240, 1440, 10080];
 
 function validateLocalPart(localPart: string): { valid: boolean; error?: string } {
   if (!localPart || localPart.length < 3) {
@@ -50,6 +51,9 @@ export async function GET() {
       fullAddress: `${row.local_part}@${row.domain}`,
       createdAt: row.created_at,
       isActive: row.is_active === 1,
+      expiryMinutes: row.expiry_minutes,
+      autoDelete: row.auto_delete === 1,
+      maxEmails: row.max_emails,
       emailCount: row.email_count,
       lastEmailAt: row.last_email_at,
     }));
@@ -66,7 +70,7 @@ export async function POST(req: NextRequest) {
     await initDB();
     const db = getDb();
 
-    const { localPart } = await req.json();
+    const { localPart, expiryMinutes = 10, autoDelete = true, maxEmails = 100 } = await req.json();
 
     if (!localPart) {
       return NextResponse.json({ error: "Address is required" }, { status: 400 });
@@ -76,6 +80,14 @@ export async function POST(req: NextRequest) {
     const validation = validateLocalPart(normalized);
     if (!validation.valid) {
       return NextResponse.json({ error: validation.error }, { status: 400 });
+    }
+
+    if (!VALID_EXPIRY.includes(expiryMinutes)) {
+      return NextResponse.json({ error: "Invalid expiry time" }, { status: 400 });
+    }
+
+    if (maxEmails < 1 || maxEmails > 10000) {
+      return NextResponse.json({ error: "Max emails must be between 1 and 10000" }, { status: 400 });
     }
 
     // Check if already exists
@@ -91,8 +103,9 @@ export async function POST(req: NextRequest) {
     const id = nanoid(21);
 
     await db.execute({
-      sql: `INSERT INTO addresses (id, local_part, domain) VALUES (?, ?, ?)`,
-      args: [id, normalized, VALID_DOMAIN],
+      sql: `INSERT INTO addresses (id, local_part, domain, expiry_minutes, auto_delete, max_emails)
+            VALUES (?, ?, ?, ?, ?, ?)`,
+      args: [id, normalized, VALID_DOMAIN, expiryMinutes, autoDelete ? 1 : 0, maxEmails],
     });
 
     return NextResponse.json({
@@ -102,6 +115,9 @@ export async function POST(req: NextRequest) {
         localPart: normalized,
         domain: VALID_DOMAIN,
         fullAddress: `${normalized}@${VALID_DOMAIN}`,
+        expiryMinutes,
+        autoDelete,
+        maxEmails,
       },
     });
   } catch (error) {

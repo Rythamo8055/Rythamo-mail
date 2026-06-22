@@ -29,9 +29,28 @@ export async function initDB() {
       domain TEXT NOT NULL DEFAULT 'rythamo.qzz.io',
       created_at TEXT DEFAULT (datetime('now')),
       is_active INTEGER DEFAULT 1,
+      expiry_minutes INTEGER DEFAULT 10,
+      auto_delete INTEGER DEFAULT 1,
+      max_emails INTEGER DEFAULT 100,
       UNIQUE(local_part, domain)
     )
   `);
+
+  // Migrations for existing databases
+  const migrations = [
+    { sql: `ALTER TABLE addresses ADD COLUMN expiry_minutes INTEGER DEFAULT 10`, error: "duplicate column" },
+    { sql: `ALTER TABLE addresses ADD COLUMN auto_delete INTEGER DEFAULT 1`, error: "duplicate column" },
+    { sql: `ALTER TABLE addresses ADD COLUMN max_emails INTEGER DEFAULT 100`, error: "duplicate column" },
+    { sql: `ALTER TABLE emails ADD COLUMN is_read INTEGER DEFAULT 0`, error: "duplicate column" },
+  ];
+
+  for (const migration of migrations) {
+    try {
+      await db.execute(migration.sql);
+    } catch {
+      // Column already exists
+    }
+  }
 
   await db.execute(`
     CREATE TABLE IF NOT EXISTS emails (
@@ -46,13 +65,6 @@ export async function initDB() {
       is_read INTEGER DEFAULT 0
     )
   `);
-
-  // Migration: add is_read column if missing
-  try {
-    await db.execute(`ALTER TABLE emails ADD COLUMN is_read INTEGER DEFAULT 0`);
-  } catch {
-    // Column already exists
-  }
 
   await db.execute(`
     CREATE INDEX IF NOT EXISTS idx_address ON emails(address)
@@ -69,5 +81,16 @@ export async function initDB() {
 
 export async function cleanupExpired() {
   const db = getDb();
-  await db.execute(`DELETE FROM emails WHERE expires_at < datetime('now')`);
+  await db.execute(`DELETE FROM emails WHERE expires_at < datetime('now') AND expires_at != 'never'`);
 }
+
+export const EXPIRY_OPTIONS = [
+  { value: 5, label: "5 minutes" },
+  { value: 10, label: "10 minutes" },
+  { value: 30, label: "30 minutes" },
+  { value: 60, label: "1 hour" },
+  { value: 240, label: "4 hours" },
+  { value: 1440, label: "24 hours" },
+  { value: 10080, label: "7 days" },
+  { value: 0, label: "Never" },
+] as const;
