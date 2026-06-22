@@ -4,6 +4,13 @@ import { getDb, initDB, cleanupExpired } from "@/lib/db";
 
 export async function POST(req: NextRequest) {
   try {
+    // Validate webhook secret
+    const secret = req.headers.get("x-webhook-secret");
+    const expectedSecret = process.env.WEBHOOK_SECRET;
+    if (expectedSecret && secret !== expectedSecret) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     await initDB();
     const db = getDb();
 
@@ -33,7 +40,14 @@ export async function POST(req: NextRequest) {
       body = text;
     }
 
+    // Sanitize address
     const address = to.replace(/["<>]/g, "").trim().toLowerCase();
+
+    // Validate address format
+    if (!address.endsWith("@rythamo.qzz.io") || address.length < 5) {
+      return NextResponse.json({ error: "Invalid address" }, { status: 400 });
+    }
+
     const id = nanoid(21);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
